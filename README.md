@@ -19,10 +19,14 @@ Manage products, prices, merchant inventory, orders, shipping, returns, certific
 
 ## Install
 
+Human install from a checkout:
+
 ```bash
-npm install -g .        # from this checkout, or: npm install <published-package>
+npm install
 npm run build
 ```
+
+**For an AI agent installing this on a machine:** follow [AGENTS.md](./AGENTS.md). It is the exact sequence — clone to `~/.shein-mcp/app`, build, verify 129 actions, register the stdio server with absolute paths, then stop for the user to finish SHEIN authorization. Do not invent credentials.
 
 ## Authorize (two options)
 
