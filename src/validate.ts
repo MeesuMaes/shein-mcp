@@ -1,6 +1,7 @@
 /** Parameter validation. Native contract methods validate through Ajv (the MCP SDK's
  *  JSON-schema validator); the eight legacy actions use a minimal structural check. */
 import { createRequire } from 'node:module';
+import { fail } from './types.js';
 
 const require_ = createRequire(import.meta.url);
 
@@ -9,6 +10,36 @@ type AjvFactory = { getValidator(schema: Record<string, unknown>): AjvCheck };
 
 const validators = new Map<string, AjvCheck>();
 let ajvFactory: AjvFactory | null = null;
+
+/** Load the SDK's JSON-schema validator module once. The deep import
+ *  `@modelcontextprotocol/sdk/validation/ajv` is NOT a public SDK API — the SDK offers
+ *  no equivalent export — so the dependency is pinned to an exact version in
+ *  package.json and this loader is probed at startup (see server.ts) and in
+ *  `scripts/verify-contracts.mjs`, so a moved module fails the build/CI instead of
+ *  crashing the first native action call. (The subpath exports map maps `./validation/ajv`
+ *  to `ajv-provider.js`; the historical `./validation/ajv.js` specifier no longer resolves.) */
+export function loadValidatorFactory(): AjvFactory {
+  if (ajvFactory) return ajvFactory;
+  const mod = require_('@modelcontextprotocol/sdk/validation/ajv') as
+    { AjvJsonSchemaValidator: new () => AjvFactory };
+  if (!mod || typeof mod.AjvJsonSchemaValidator !== 'function') {
+    fail('upstream_error', 'SHEIN validator unavailable; @modelcontextprotocol/sdk pinned to 1.32.2 '
+      + 'no longer exports AjvJsonSchemaValidator');
+  }
+  ajvFactory = new mod.AjvJsonSchemaValidator();
+  return ajvFactory;
+}
+
+/** Startup self-check: resolve the validator module and instantiate it, so a moved or
+ *  removed SDK module path fails at `serve` launch, not at the first action call. */
+export function probeValidator(): void {
+  const factory = loadValidatorFactory();
+  const check = factory.getValidator({ type: 'object' });
+  if (!check || typeof check !== 'function' || !check({}).valid) {
+    fail('upstream_error', 'SHEIN validator unavailable; the pinned @modelcontextprotocol/sdk '
+      + 'validator does not accept a trivial schema');
+  }
+}
 
 /** Ajv-backed validation for native actions (full JSON Schema semantics). */
 export function validateNative(parameters: unknown, name: string,
@@ -20,14 +51,10 @@ export function validateNative(parameters: unknown, name: string,
     failInvalid(name);
   }
   if (!serialized || Buffer.byteLength(serialized) > 256 * 1024) failInvalid(name);
-  if (!ajvFactory) {
-    const mod = require_('@modelcontextprotocol/sdk/validation/ajv.js') as
-      { AjvJsonSchemaValidator: new () => AjvFactory };
-    ajvFactory = new mod.AjvJsonSchemaValidator();
-  }
+  const factory = loadValidatorFactory();
   let check = validators.get(name);
   if (!check) {
-    check = ajvFactory.getValidator(inputSchema);
+    check = factory.getValidator(inputSchema);
     validators.set(name, check);
   }
   if (!check(parameters).valid) failInvalid(name);

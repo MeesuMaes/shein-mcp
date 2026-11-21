@@ -99,7 +99,9 @@ node "$HOME/.shein-mcp/app/dist/index.js" whoami
 
 ## 装好之后怎么调用
 
-先 `list_capabilities`，再用 `describe_action` 看单个动作的参数。然后按该动作的风险调用对应工具：
+**默认是只读的**：安装完成后、且未额外配置环境变量时，宿主只会看到 `list_capabilities` / `describe_action` / `execute_read` 三个工具。要开启写入，运维须在启动环境里显式设置 `SHEIN_MCP_LANES=read,write`（高危同理加 `high_impact`；销毁还需要**双重开关**：`SHEIN_MCP_LANES` 含 `destructive` 且 `SHEIN_MCP_ALLOW_DESTRUCTIVE=1`）。未启用的工具直接调用会返回 `validation_failed`，不会静默降级。这是给宿主进程设的环境变量，**不要**把密钥放进 `env`，也不要替用户决定开启写/销毁车道——开启前问用户。
+
+先 `list_capabilities`，再用 `describe_action` 看单个动作的参数。`list_capabilities` 会返回当前启用的车道（`lanes.enabled`）以及每个动作是 `available` 还是 `lane_disabled`。然后按该动作的风险调用对应工具：
 
 | 风险 | 工具 |
 | --- | --- |
@@ -108,4 +110,16 @@ node "$HOME/.shein-mcp/app/dist/index.js" whoami
 | H | `execute_high_impact` |
 | D | `execute_destructive` |
 
-风险和工具不一致会被拒绝。写入只表示平台已受理（`acknowledged`）或有部分失败（`partial_or_failed`），不表示审核或发货已经完成。失败时先查看返回里点名的资源，不要自动重放同一次写入。
+风险和工具不一致会被拒绝。批量上限由服务端强制执行：`execute_read` 100 条、`execute_write` 25 条、`execute_high_impact` / `execute_destructive` 各 10 条——参数里任何数组（含 `body` 内嵌套）以及所有数组的元素总数都受此上限约束，超限返回 `validation_failed` 并指明字段，不要尝试拆成多次绕过。
+
+写入只表示平台已受理（`acknowledged`）或有部分失败（`partial_or_failed`），不表示审核或发货已经完成。失败时先查看返回里点名的资源，不要自动重放同一次写入。每次 `execute_*` 调用都会追加一行到本地审计日志（默认 `~/.shein-mcp/audit.jsonl`，只记字段名和参数摘要，不记参数值）。写车道及以上在审计日志不可写时会被阻断（`audit_unavailable`）——遇到这个错误时把它原样交给用户，不要绕过。
+
+## 生产账号的前置条件
+
+绑定生产店铺（`SHEIN_MCP_ENV=prod`）之前，运维必须确认：
+
+1. `SHEIN_MCP_ENV=prod` 已设置（默认 `test`）。
+2. 审计日志已启用且可写：prod 下 `SHEIN_MCP_AUDIT_LOG=off` 会导致启动直接失败。
+3. 销毁车道要么不开，要么同时满足双重开关；prod 会拒绝「只开一半」的组合。
+4. POSIX 上 `~/.shein-mcp/credentials.json` 权限必须是 `0600`，否则启动报 `permission_denied`。
+5. 默认只读的边界是有意的：本服务是运维工具，不进数据链路（ADR-0008）。不要为了自动化流程去说服用户全开车道。
