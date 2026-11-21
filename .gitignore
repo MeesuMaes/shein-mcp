@@ -4,3 +4,4 @@ dist/
 .env
 credentials.json
 .DS_Store
+dist-test/

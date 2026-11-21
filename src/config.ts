@@ -47,6 +47,26 @@ export function credentialsFromEnv(): Credentials | null {
   };
 }
 
+const isPosix = process.platform !== 'win32';
+
+/** POSIX-only credential file permission check (ADR-0008): the file must be 0600.
+ *  Windows ACLs don't map to a POSIX mode, so no check is performed there rather
+ *  than reporting a meaningless mode. */
+function checkCredentialFileMode(filePath: string): void {
+  if (!isPosix) return;
+  try {
+    const mode = fs.statSync(filePath).mode & 0o777;
+    if (mode !== 0o600) {
+      fail('permission_denied',
+        `Credential file ${filePath} must have mode 0600 (found ${mode.toString(8)}); run: chmod 600 ${filePath}`);
+    }
+  } catch (error) {
+    if ((error as { code?: string })?.code === 'ENOENT') return;
+    if (error && typeof error === 'object' && 'kind' in error) throw error;
+    fail('permission_denied', `Credential file ${filePath} is not readable or its mode cannot be verified`);
+  }
+}
+
 export function readConfigFile(): Credentials | null {
   let raw: string;
   try {
@@ -65,11 +85,18 @@ export function readConfigFile(): Credentials | null {
   }
 }
 
+/** File-sourced credentials must pass the 0600 check (env-sourced ones have no file). */
+export function loadFileCredentials(): Credentials | null {
+  if (!fs.existsSync(CONFIG_FILE)) return null;
+  checkCredentialFileMode(CONFIG_FILE);
+  return readConfigFile();
+}
+
 /** Env wins over the config file so CI/sandbox runs can override without editing state. */
 export function loadCredentials(): Credentials {
   const fromEnv = credentialsFromEnv();
   if (fromEnv) return fromEnv;
-  const fromFile = readConfigFile();
+  const fromFile = loadFileCredentials();
   if (fromFile) return fromFile;
   fail('credentials_missing',
     'No SHEIN credentials found. Run `shein-mcp authorize` or set SHEIN_* environment variables.');
